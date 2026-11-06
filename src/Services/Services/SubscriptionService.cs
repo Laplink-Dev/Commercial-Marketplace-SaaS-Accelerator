@@ -154,7 +154,7 @@ public class SubscriptionService
             existingPlanDetail = this.planRepository.GetById(subscription.AmpplanId);
         }
 
-        SubscriptionResultExtension subscritpionDetail = new SubscriptionResultExtension
+        SubscriptionResultExtension subscriptionDetail = new SubscriptionResultExtension
         {
             Id = subscription.AmpsubscriptionId,
             SubscribeId = subscription.Id,
@@ -174,12 +174,12 @@ public class SubscriptionService
             IsMeteringSupported = existingPlanDetail != null ? (existingPlanDetail.IsmeteringSupported ?? false) : false,
         };
 
-        subscritpionDetail.Term.TermUnit = string.IsNullOrWhiteSpace(subscription.Term) ? TermUnit.P1M : new TermUnit(subscription.Term);
+        subscriptionDetail.Term.TermUnit = string.IsNullOrWhiteSpace(subscription.Term) ? TermUnit.P1M : new TermUnit(subscription.Term);
 
-        subscritpionDetail.Purchaser = new PurchaserResult();
-        subscritpionDetail.Purchaser.EmailId = subscription.PurchaserEmail;
-        subscritpionDetail.Purchaser.TenantId = subscription.PurchaserTenantId ?? default;
-        return subscritpionDetail;
+        subscriptionDetail.Purchaser = new PurchaserResult();
+        subscriptionDetail.Purchaser.EmailId = subscription.PurchaserEmail;
+        subscriptionDetail.Purchaser.TenantId = subscription.PurchaserTenantId ?? default;
+        return subscriptionDetail;
     }
 
     /// <summary>

@@ -2,8 +2,12 @@
 // Licensed under the MIT License. See LICENSE file in the project root for license information.
 
 using System;
+using System.ComponentModel.DataAnnotations;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Marketplace.SaaS.Accelerator.DataAccess.Contracts;
 using Marketplace.SaaS.Accelerator.DataAccess.Entities;
@@ -94,6 +98,8 @@ public class WebHookHandler : IWebhookHandler
     private readonly IOfferAttributesRepository offersAttributeRepository;
 
     private const string AcceptSubscriptionUpdates = "AcceptSubscriptionUpdates";
+    private const string SubscribeParameterPlanAttributeIdConfigName = "SubscribeParameterPlanAttributeId";
+    private const string SubscribeParameterBackendUrlConfigName = "SubscribeParameterBackendUrl";
 
     /// <summary>
     /// Initializes a new instance of the <see cref="WebHookHandler" /> class.
@@ -170,12 +176,12 @@ public class WebHookHandler : IWebhookHandler
     /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
     public async Task SubscribedAsync(WebhookPayload payload)
     {
-        var oldValue = this.subscriptionService.GetSubscriptionsBySubscriptionId(payload.SubscriptionId);
-        var subscriptionData = await this.fulfillApiService.GetSubscriptionByIdAsync(payload.SubscriptionId).ConfigureAwait(false);
+        var oldValue = subscriptionService.GetSubscriptionsBySubscriptionId(payload.SubscriptionId);
+        var subscriptionData = await fulfillApiService.GetSubscriptionByIdAsync(payload.SubscriptionId).ConfigureAwait(false);
 
         if (subscriptionData == null || subscriptionData.Id == default)
         {
-            await this.applicationLogService.AddApplicationLog($"Subscribe webhook received for SubscriptionId {payload.SubscriptionId}, but the subscription could not be retrieved from the Fulfillment API.").ConfigureAwait(false);
+            await applicationLogService.AddApplicationLog($"Subscribe webhook received for SubscriptionId {payload.SubscriptionId}, but the subscription could not be retrieved from the Fulfillment API.").ConfigureAwait(false);
             return;
         }
 
@@ -184,7 +190,7 @@ public class WebHookHandler : IWebhookHandler
             // Subscription is not known locally - most likely it was auto-activated at purchase, or the
             // customer subscribed through the Microsoft admin center instead of the publisher's landing page.
             // Persist the offer/plan/subscription records now so this system is aware of it.
-            var userId = this.usersRepository.Save(new Users()
+            var userId = usersRepository.Save(new Users()
             {
                 EmailAddress = subscriptionData.Purchaser?.EmailId,
                 FullName = subscriptionData.Purchaser?.EmailId,
@@ -199,15 +205,15 @@ public class WebHookHandler : IWebhookHandler
                 CreateDate = DateTime.Now,
                 OfferGuid = Guid.NewGuid(),
             };
-            var newOfferId = this.offersRepository.Add(offers);
+            var newOfferId = offersRepository.Add(offers);
 
-            var subscriptionPlanDetail = await this.fulfillApiService.GetAllPlansForSubscriptionAsync(payload.SubscriptionId).ConfigureAwait(false) ?? new List<PlanDetailResultExtension>();
+            var subscriptionPlanDetail = await fulfillApiService.GetAllPlansForSubscriptionAsync(payload.SubscriptionId).ConfigureAwait(false) ?? new List<PlanDetailResultExtension>();
             subscriptionPlanDetail.ForEach(x =>
             {
                 x.OfferId = newOfferId;
                 x.PlanGUID = Guid.NewGuid();
             });
-            this.subscriptionService.AddUpdateAllPlanDetailsForSubscription(subscriptionPlanDetail);
+            subscriptionService.AddUpdateAllPlanDetailsForSubscription(subscriptionPlanDetail);
 
             // The Marketplace "list available plans for subscription" call can legitimately succeed but
             // come back without the plan this subscription is actually on (e.g. private/preview offers).
@@ -216,9 +222,9 @@ public class WebHookHandler : IWebhookHandler
             // AdminSite Subscriptions list) will null-reference on this record.
             if (!subscriptionPlanDetail.Any(x => x.PlanId == subscriptionData.PlanId))
             {
-                await this.applicationLogService.AddApplicationLog($"Subscribe webhook: plan {subscriptionData.PlanId} for SubscriptionId {payload.SubscriptionId} was not returned by the available-plans list; adding a fallback plan record so the subscription resolves locally.").ConfigureAwait(false);
+                await applicationLogService.AddApplicationLog($"Subscribe webhook: plan {subscriptionData.PlanId} for SubscriptionId {payload.SubscriptionId} was not returned by the available-plans list; adding a fallback plan record so the subscription resolves locally.").ConfigureAwait(false);
 
-                this.subscriptionService.AddPlanDetailsForSubscription(new PlanDetailResultExtension
+                subscriptionService.AddPlanDetailsForSubscription(new PlanDetailResultExtension
                 {
                     PlanId = subscriptionData.PlanId,
                     DisplayName = subscriptionData.PlanId,
@@ -228,7 +234,7 @@ public class WebHookHandler : IWebhookHandler
                 });
             }
 
-            var subscribeId = this.subscriptionService.AddOrUpdatePartnerSubscriptions(subscriptionData, userId);
+            var subscribeId = subscriptionService.AddOrUpdatePartnerSubscriptions(subscriptionData, userId);
 
             SubscriptionAuditLogs auditLog = new SubscriptionAuditLogs()
             {
@@ -239,16 +245,16 @@ public class WebHookHandler : IWebhookHandler
                 CreateBy = userId,
                 CreateDate = DateTime.Now,
             };
-            this.subscriptionsLogRepository.Save(auditLog);
+            subscriptionsLogRepository.Save(auditLog);
 
-            await this.applicationLogService.AddApplicationLog($"Subscribe webhook: created local subscription record for SubscriptionId {payload.SubscriptionId} with status {subscriptionData.SaasSubscriptionStatus}.").ConfigureAwait(false);
+            await applicationLogService.AddApplicationLog($"Subscribe webhook: created local subscription record for SubscriptionId {payload.SubscriptionId} with status {subscriptionData.SaasSubscriptionStatus}.").ConfigureAwait(false);
         }
         else if (Convert.ToString(oldValue.SubscriptionStatus) != Convert.ToString(subscriptionData.SaasSubscriptionStatus))
         {
             // Subscription already exists locally (e.g. the customer used the landing page) - keep the status in
             // sync with what Microsoft reports. This also covers the auto-activation case where the landing page
             // flow started but Microsoft already marked the subscription "Subscribed" before we could.
-            this.subscriptionService.UpdateStateOfSubscription(payload.SubscriptionId, Convert.ToString(subscriptionData.SaasSubscriptionStatus), true);
+            subscriptionService.UpdateStateOfSubscription(payload.SubscriptionId, Convert.ToString(subscriptionData.SaasSubscriptionStatus), true);
 
             SubscriptionAuditLogs auditLog = new SubscriptionAuditLogs()
             {
@@ -259,14 +265,147 @@ public class WebHookHandler : IWebhookHandler
                 CreateBy = null,
                 CreateDate = DateTime.Now,
             };
-            this.subscriptionsLogRepository.Save(auditLog);
+            subscriptionsLogRepository.Save(auditLog);
 
-            await this.applicationLogService.AddApplicationLog($"Subscribe webhook: synced status for SubscriptionId {payload.SubscriptionId} to {subscriptionData.SaasSubscriptionStatus}.").ConfigureAwait(false);
+            await applicationLogService.AddApplicationLog($"Subscribe webhook: synced status for SubscriptionId {payload.SubscriptionId} to {subscriptionData.SaasSubscriptionStatus}.").ConfigureAwait(false);
         }
         else
         {
-            await this.applicationLogService.AddApplicationLog($"Subscribe webhook received for SubscriptionId {payload.SubscriptionId}; subscription already up to date, no action required.").ConfigureAwait(false);
+            await applicationLogService.AddApplicationLog($"Subscribe webhook received for SubscriptionId {payload.SubscriptionId}; subscription already up to date, no action required.").ConfigureAwait(false);
         }
+
+        await this.SaveConfiguredSubscriptionParameterAsync(payload.SubscriptionId, subscriptionData.PlanId).ConfigureAwait(false);
+    }
+
+    private async Task SaveConfiguredSubscriptionParameterAsync(Guid subscriptionId, string planId)
+    {
+        var planAttributeIdConfig = this.applicationConfigRepository.GetValueByName(SubscribeParameterPlanAttributeIdConfigName);
+        if (!int.TryParse(planAttributeIdConfig, out var configuredPlanAttributeId) || configuredPlanAttributeId <= 0)
+        {
+            return;
+        }
+
+        var backendValue = await this.GetBackendValueForSubscriptionAsync(subscriptionId).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(backendValue))
+        {
+            return;
+        }
+
+        var plan = this.planRepository.GetById(planId);
+        if (plan == null || plan.PlanGuid == default)
+        {
+            await this.applicationLogService.AddApplicationLog($"Subscribe webhook: plan {planId} not found locally while setting subscription parameter for SubscriptionId {subscriptionId}.").ConfigureAwait(false);
+            return;
+        }
+
+        var parameters = this.subscriptionService.GetSubscriptionsParametersById(subscriptionId, plan.PlanGuid);
+        var parameter = parameters?.FirstOrDefault(x => x.PlanAttributeId == configuredPlanAttributeId && string.Equals(x.Type, "input", StringComparison.OrdinalIgnoreCase));
+        if (parameter == null)
+        {
+            await this.applicationLogService.AddApplicationLog($"Subscribe webhook: no enabled input parameter found for PlanAttributeId {configuredPlanAttributeId} on SubscriptionId {subscriptionId}.").ConfigureAwait(false);
+            return;
+        }
+
+        parameter.Value = backendValue;
+        this.subscriptionService.AddSubscriptionParameters(new List<SubscriptionParametersModel> { parameter }, currentUserId: null);
+        await this.applicationLogService.AddApplicationLog($"Subscribe webhook: saved backend value for PlanAttributeId {configuredPlanAttributeId} on SubscriptionId {subscriptionId}.").ConfigureAwait(false);
+    }
+
+    private async Task<string> GetBackendValueForSubscriptionAsync(Guid subscriptionId)
+    {
+        var backendUrl = this.applicationConfigRepository.GetValueByName(SubscribeParameterBackendUrlConfigName);
+        if (string.IsNullOrWhiteSpace(backendUrl))
+        {
+            return null;
+        }
+
+        try
+        {
+            var subscriptionData = await this.fulfillApiService.GetSubscriptionByIdAsync(subscriptionId).ConfigureAwait(false);
+            if (subscriptionData == null || subscriptionData.Id == default)
+            {
+                await this.applicationLogService.AddApplicationLog($"Subscribe webhook: backend value allocation skipped because subscription details could not be loaded for SubscriptionId {subscriptionId}.").ConfigureAwait(false);
+                return null;
+            }
+
+            var request = new AllocateSaaSSNRequest
+            {
+                OfferId = subscriptionData.OfferId,
+                PlanId = subscriptionData.PlanId,
+                SubscriptionId = subscriptionData.Id.ToString(),
+                Email = subscriptionData.Purchaser?.EmailId ?? string.Empty,
+                User = subscriptionData.Name ?? subscriptionData.Purchaser?.EmailId ?? string.Empty,
+                Quantity = subscriptionData.Quantity,
+                EndDate = subscriptionData.Term?.EndDate.UtcDateTime,
+            };
+
+            var requestJson = JsonSerializer.Serialize(request);
+            using var content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+
+            using var httpClient = new HttpClient();
+            var response = await httpClient.PostAsync(backendUrl, content).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                await this.applicationLogService.AddApplicationLog($"Subscribe webhook: backend value lookup failed for SubscriptionId {subscriptionId}. Status code: {response.StatusCode}.").ConfigureAwait(false);
+                return null;
+            }
+
+            var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(responseBody))
+            {
+                return null;
+            }
+
+            var trimmedResponse = responseBody.Trim();
+            if (trimmedResponse.StartsWith("{", StringComparison.Ordinal))
+            {
+                var backendResponse = JsonSerializer.Deserialize<AllocateSaaSSNResponse>(trimmedResponse);
+                if (!string.IsNullOrWhiteSpace(backendResponse?.KeyCode))
+                {
+                    return backendResponse.KeyCode;
+                }
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            await this.applicationLogService.AddApplicationLog($"Subscribe webhook: backend value lookup failed for SubscriptionId {subscriptionId}. Error: {ex.Message}.").ConfigureAwait(false);
+            return null;
+        }
+    }
+
+    private class AllocateSaaSSNRequest
+    {
+        [StringLength(255)]
+        public string OfferId { get; set; }
+
+        [Required]
+        [StringLength(255)]
+        public string PlanId { get; set; } = string.Empty;
+
+        [Required]
+        [StringLength(255)]
+        public string SubscriptionId { get; set; } = string.Empty;
+
+        [Required]
+        [EmailAddress]
+        [StringLength(255)]
+        public string Email { get; set; } = string.Empty;
+
+        [Required]
+        public string User { get; set; } = string.Empty;
+
+        [Range(1, int.MaxValue)]
+        public int Quantity { get; set; } = 1;
+
+        [Required]
+        public DateTime? EndDate { get; set; }
+    }
+
+    private class AllocateSaaSSNResponse
+    {
+        public string KeyCode { get; set; }
     }
 
     /// <summary>

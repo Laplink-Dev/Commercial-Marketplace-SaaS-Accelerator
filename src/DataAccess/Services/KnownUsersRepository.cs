@@ -53,7 +53,7 @@ public class KnownUsersRepository : IKnownUsersRepository
     /// </returns>
     public KnownUsers GetKnownUserDetail(string emailAddress, int roleId)
     {
-        return this.context.KnownUsers.Where(s => s.UserEmail == emailAddress && s.RoleId == roleId).FirstOrDefault();
+        return context.KnownUsers.Where(s => s.UserEmail == emailAddress && s.RoleId == roleId).FirstOrDefault();
     }
 
     /// <summary>

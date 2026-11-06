@@ -196,10 +196,19 @@ public class SubscriptionsRepository : ISubscriptionsRepository
     /// <param name="subscriptionParametersOutput">The subscription parameters output.</param>
     public void AddSubscriptionParameters(SubscriptionParametersOutput subscriptionParametersOutput)
     {
-        var existingSubscriptionparameter = this.context.SubscriptionAttributeValues.Where(s => s.Id == subscriptionParametersOutput.Id).FirstOrDefault();
+        var existingSubscriptionparameter = subscriptionParametersOutput.Id > 0
+            ? this.context.SubscriptionAttributeValues.FirstOrDefault(s => s.Id == subscriptionParametersOutput.Id)
+            : this.context.SubscriptionAttributeValues.FirstOrDefault(s => s.SubscriptionId == subscriptionParametersOutput.SubscriptionId && s.PlanAttributeId == subscriptionParametersOutput.PlanAttributeId);
+
         if (existingSubscriptionparameter != null)
         {
             existingSubscriptionparameter.OfferId = subscriptionParametersOutput.OfferId;
+            existingSubscriptionparameter.PlanId = subscriptionParametersOutput.PlanId;
+            existingSubscriptionparameter.PlanAttributeId = subscriptionParametersOutput.PlanAttributeId;
+            existingSubscriptionparameter.SubscriptionId = subscriptionParametersOutput.SubscriptionId;
+            existingSubscriptionparameter.Value = subscriptionParametersOutput.Value;
+            existingSubscriptionparameter.UserId = subscriptionParametersOutput.UserId;
+            existingSubscriptionparameter.CreateDate = subscriptionParametersOutput.CreateDate;
             this.context.SubscriptionAttributeValues.Update(existingSubscriptionparameter);
             this.context.SaveChanges();
         }
